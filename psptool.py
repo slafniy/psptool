@@ -100,7 +100,7 @@ FIRMWARE_ENTRY_TYPES = [  # typedef struct _FIRMWARE_ENTRY_TABLE {
 
 PARSABLE_DIRECTORY_MAGIC = [b'$PSP', b'$BHD', b'$PL2', b'$BL2']
 
-DIRECTORY_HEADER_SIZES = {
+DIRECTORY_HEAD_SIZES = {
     b'$PSP': 4 * 4,
     b'$PL2': 4 * 4,
     b'$BHD': 4 * 4,
@@ -313,7 +313,7 @@ class PSPTool:
         count = struct.unpack('<I', self._file_content[count_offset:count_offset + 4])[0]
         magic = self._file_content[address:address + 4]
 
-        size = DIRECTORY_HEADER_SIZES[magic] + (DIRECTORY_ENTRY_SIZES[magic] * count)
+        size = DIRECTORY_HEAD_SIZES[magic] + (DIRECTORY_ENTRY_SIZES[magic] * count)
         termination_bytes = self._file_content[(address + size):(address + size + 4)]
 
         # Assertion that we assumed the right directory size
@@ -339,7 +339,7 @@ class PSPTool:
         return directory
 
     def _parse_directory_entries(self, directory):
-        header_size = DIRECTORY_HEADER_SIZES[directory['magic']]
+        header_size = DIRECTORY_HEAD_SIZES[directory['magic']]
         entry_size = DIRECTORY_ENTRY_SIZES[directory['magic']]
 
         entries = []
@@ -484,6 +484,16 @@ class PSPTool:
             if entry['type'] == type_:
                 return entry
 
+    def get_directory_header_with_index(self, directory_index):
+        directory = self._directories[directory_index]
+
+        dir_start = directory['address']
+        dir_end = dir_start + directory['size']
+
+        raw_directory_header = self._file_content[dir_start:dir_end]
+
+        return raw_directory_header
+
     def extract_entry(self, directory_index, entry_index, outfile=None, no_duplicates=False, decompress=False,
                       to_pem_key=False):
         entry = self._directories[directory_index]['entries'][entry_index]
@@ -588,7 +598,10 @@ class PSPTool:
             self.extract_directory(directory_index, outdir, decompress, no_duplicates, to_pem_key)
 
     def replace_directory_entry(self, directory_index, entry_index, address, size, subfile, outfile=None):
-        entry = self._directories[directory_index]['entries'][entry_index]
+        # todo: hacky! actually change the PSPTool model instead of just assembling bytes together
+
+        directory = self._directories[directory_index]
+        entry = directory['entries'][entry_index]
 
         if subfile is not None:
             with open(subfile, 'rb') as f:
@@ -610,8 +623,29 @@ class PSPTool:
         padding = padding_size * b'\xFF'
         new_file_content = self._file_content[:start] + subfile_content + padding + self._file_content[end_padded:]
 
-        # 2) adapt the directory header to point to the new entry
-        # todo
+        # 2) adapt the directory entry to point to the new entry
+        directory_header = self.get_directory_header_with_index(directory_index)
+
+        dir_head_size = DIRECTORY_HEAD_SIZES[directory['magic']]
+        dir_entry_size = DIRECTORY_ENTRY_SIZES[directory['magic']]
+
+        entry_start = dir_head_size + dir_entry_size * entry_index
+        entry_end = entry_start + dir_entry_size
+
+        # todo: support BHD headers, too
+        raw_type = struct.pack('<I', entry['type'])  # keep the original type
+        raw_size = struct.pack('<I', size)
+        raw_address = struct.pack('<I', address ^ 0xFF000000)  # mask the address as AMD does
+        raw_reserved = struct.pack('<I', 0)
+        raw_entry = raw_type + raw_size + raw_address + raw_reserved
+
+        # todo: update fletcher
+        new_directory_header = directory_header[:entry_start] + raw_entry + directory_header[entry_end:]
+
+        dir_start = directory['address']
+        dir_end = dir_start + directory['size']
+
+        new_file_content = new_file_content[:dir_start] + new_directory_header + new_file_content[dir_end:]
 
         if outfile is not None:
             with open(outfile, 'wb') as f:
