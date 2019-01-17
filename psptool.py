@@ -613,7 +613,7 @@ class PSPTool:
             print_error_and_exit('input of at least 0x%x bytes needed.' % entry['size'])
 
         # 1) insert subfile at address and pad it to size (if needed)
-        #  note: its the callers responsibility that the address may be overwritten by size bytes
+        #  note: its the caller's responsibility that the address may be overwritten by size bytes
         start = address
         padding_size = size - len(subfile_content)
 
@@ -621,7 +621,7 @@ class PSPTool:
         end_padded = end + padding_size
 
         padding = padding_size * b'\xFF'
-        new_file_content = self._file_content[:start] + subfile_content + padding + self._file_content[end_padded:]
+        self._file_content = self._file_content[:start] + subfile_content + padding + self._file_content[end_padded:]
 
         # 2) adapt the directory entry to point to the new entry
         directory_header = self.get_directory_header_with_index(directory_index)
@@ -645,13 +645,47 @@ class PSPTool:
         dir_start = directory['address']
         dir_end = dir_start + directory['size']
 
-        new_file_content = new_file_content[:dir_start] + new_directory_header + new_file_content[dir_end:]
+        # todo: extract: self.update_file_content(addr, size, content)
+        self._file_content = self._file_content[:dir_start] + new_directory_header + self._file_content[dir_end:]
 
+        # todo: maybe extract: self.write_output(outfile)
         if outfile is not None:
             with open(outfile, 'wb') as f:
-                f.write(new_file_content)
+                f.write(self._file_content)
         else:
-            return new_file_content
+            return self._file_content
+
+    def update_entry_header(self, directory_index, entry_index, size):
+        directory = self._directories[directory_index]
+        entry = directory['entries'][entry_index]
+
+        if self._parse_entry_header(entry) == {}:
+            print_warning('Cannot update entry header: Entry has no valid entry header.')
+            return False
+
+        # todo: add support for compressed entries
+        compressed = 0x0
+        s_signed = size - 0x200
+        s_full = 0x0
+        s_packed = size
+
+        # alter the original header fields (see _parse_entry_header)
+        header = bytearray(entry['content'][:0x100])
+        # header[0x10:0x14] = struct.pack('<I', id_)
+        header[0x14:0x18] = struct.pack('<I', s_signed)
+        # header[0x38:0x48] = struct.pack('<I', sig_fp)
+        header[0x48:0x4c] = struct.pack('<I', compressed)
+        header[0x50:0x54] = struct.pack('<I', s_full)
+        # header[0x60:0x64] = struct.pack('<I', version)  # complicated!
+        # header[0x68:0x6c] = struct.pack('<I', unknown)
+        header[0x6c:0x70] = struct.pack('<I', s_packed)
+
+        start = entry['address']
+        end = start + 0x100
+
+        self._file_content = self._file_content[:start] + header + self._file_content[end:]
+
+        return self._file_content
 
     def update_signatures(self, private_key, outfile=None):
         directory_entries = [directory['entries'] for directory in self._directories]
@@ -908,6 +942,7 @@ def main():
     parser.add_argument('-p', '--private_key', help=argparse.SUPPRESS)
     parser.add_argument('-b', '--address', help=argparse.SUPPRESS, type=lambda x: int(x, 0))  # auto base detection
     parser.add_argument('-w', '--size', help=argparse.SUPPRESS, type=lambda x: int(x, 0))  # auto base detection
+    parser.add_argument('-y', '--update-entry-header', help=argparse.SUPPRESS, action='store_true')
 
     # These are the main options
     action = parser.add_mutually_exclusive_group(required=False)
@@ -940,12 +975,14 @@ def main():
 
     action.add_argument('-R', '--replace-directory-entry', help='\n'.join([
         'Copy a new entry into the ROM file and replace an existing directory entry with a new address and size.',
-        '-d idx -e idx -b addr -w size [-s subfile] [-o outfile]',
+        'Note: The given address and size are assumed to be overwritable.'
+        '-d idx -e idx -b addr -w size [-y] [-s subfile] [-o outfile]',
         '',
         '-d idx:  specifies directory_index',
         '-e idx:  specifies entry_index',
         '-b addr: specifies destination address of the new entry',
         '-w size: specifies size of the new directory entry (must be at least the size of the new entry)',
+        '-y:      rebuild inner entry header (e.g. update sizes)',
         '-s file: specifies subfile (i.e. the new entry) (default: stdin)',
         '-o file: specifies outfile (default: stdout)',
         '']), action='store_true')
@@ -987,6 +1024,10 @@ def main():
         if args.directory_index is not None and args.entry_index is not None:
             out = pt.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size,
                                              args.subfile, outfile=args.outfile)
+
+            if args.update_entry_header:
+                out = pt.update_entry_header(args.directory_index, args.entry_index, args.size)
+
         else:
             parser.print_help(sys.stderr)
 
