@@ -587,9 +587,7 @@ class PSPTool:
         for directory_index in range(len(self._directories)):
             self.extract_directory(directory_index, outdir, decompress, no_duplicates, to_pem_key)
 
-    def replace_entry(self, directory_index, entry_index, subfile, outfile):
-        # todo: when used as Python module, this should change the actual _directories/entries
-        # todo: handle file sizes and padding stuff
+    def replace_directory_entry(self, directory_index, entry_index, address, size, subfile, outfile=None):
         entry = self._directories[directory_index]['entries'][entry_index]
 
         if subfile is not None:
@@ -598,12 +596,22 @@ class PSPTool:
         else:
             subfile_content = sys.stdin.buffer.read()
 
-        if len(subfile_content) != entry['size']:
-            print_error_and_exit('input of exactly 0x%x bytes needed.' % entry['size'])
+        if len(subfile_content) < entry['size']:
+            print_error_and_exit('input of at least 0x%x bytes needed.' % entry['size'])
 
-        start = entry['address']
-        end = start + entry['size']
-        new_file_content = self._file_content[:start] + subfile_content + self._file_content[end:]
+        # 1) insert subfile at address and pad it to size (if needed)
+        #  note: its the callers responsibility that the address may be overwritten by size bytes
+        start = address
+        padding_size = size - len(subfile_content)
+
+        end = address + len(subfile_content)
+        end_padded = end + padding_size
+
+        padding = padding_size * b'\xFF'
+        new_file_content = self._file_content[:start] + subfile_content + padding + self._file_content[end_padded:]
+
+        # 2) adapt the directory header to point to the new entry
+        # todo
 
         if outfile is not None:
             with open(outfile, 'wb') as f:
@@ -864,6 +872,8 @@ def main():
     parser.add_argument('-a', '--detect-arch', help=argparse.SUPPRESS, action='store_true')
     parser.add_argument('-t', '--csvfile', help=argparse.SUPPRESS)
     parser.add_argument('-p', '--private_key', help=argparse.SUPPRESS)
+    parser.add_argument('-b', '--address', help=argparse.SUPPRESS, type=lambda x: int(x, 0))  # auto base detection
+    parser.add_argument('-w', '--size', help=argparse.SUPPRESS, type=lambda x: int(x, 0))  # auto base detection
 
     # These are the main options
     action = parser.add_mutually_exclusive_group(required=False)
@@ -894,13 +904,15 @@ def main():
         '-o file: specifies outfile/outdir (default: stdout/$PWD)',
         '']), action='store_true')
 
-    action.add_argument('-R', '--replace-entry', help='\n'.join([
-        'Replace a raw PSP firmware entry and export new ROM file.',
-        '-d idx -e idx [-s subfile] [-o outfile]',
+    action.add_argument('-R', '--replace-directory-entry', help='\n'.join([
+        'Copy a new entry into the ROM file and replace an existing directory entry with a new address and size.',
+        '-d idx -e idx -b addr -w size [-s subfile] [-o outfile]',
         '',
         '-d idx:  specifies directory_index',
         '-e idx:  specifies entry_index',
-        '-s file: specifies subfile (default: stdin)',
+        '-b addr: specifies destination address of the new entry',
+        '-w size: specifies size of the new directory entry (must be at least the size of the new entry)',
+        '-s file: specifies subfile (i.e. the new entry) (default: stdin)',
         '-o file: specifies outfile (default: stdout)',
         '']), action='store_true')
 
@@ -925,7 +937,8 @@ def main():
         if args.directory_index is not None:
             if args.entry_index is not None:
                 out = pt.extract_entry(args.directory_index, args.entry_index, outfile=args.outfile,
-                                 no_duplicates=args.no_duplicates, decompress=args.decompress, to_pem_key=args.pem_key)
+                                       no_duplicates=args.no_duplicates, decompress=args.decompress,
+                                       to_pem_key=args.pem_key)
             else:
                 pt.extract_directory(args.directory_index, outdir=args.outdir, no_duplicates=args.no_duplicates,
                                      decompress=args.decompress, to_pem_key=args.pem_key)
@@ -936,9 +949,10 @@ def main():
             else:
                 parser.print_help(sys.stderr)
 
-    elif args.replace_entry:
+    elif args.replace_directory_entry:
         if args.directory_index is not None and args.entry_index is not None:
-            out = pt.replace_entry(args.directory_index, args.entry_index, args.subfile, args.outfile)
+            out = pt.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size,
+                                             args.subfile, outfile=args.outfile)
         else:
             parser.print_help(sys.stderr)
 
