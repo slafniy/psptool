@@ -170,8 +170,8 @@ DIRECTORY_ENTRY_TYPES_SECONDARY_DIR = [0x40, 0x70]  # see entry types above
 
 
 class PSPTool:
-    def __init__(self, file, verbose=False):
-        self.file = file
+    def __init__(self, binary, verbose=False):
+        self.binary = binary
         self._verbose = verbose
 
         self._print_info = print_info if self._verbose else None
@@ -180,11 +180,8 @@ class PSPTool:
         self._pubkeys = {}
         self._accessed_entries = {}
 
-        with open(self.file, 'rb') as f:
-            self._file_content = f.read()
-
-        if len(self._file_content) != 0x1000000:
-            print_warning('Input file of unknown size. Expected size is 0x1000000 bytes (or 16MB).\n\n')
+        if len(self.binary) != 0x1000000:
+            print_warning('Input binary of unknown size. Expected size is 0x1000000 bytes (or 16MB).\n\n')
 
         self.agesa_version = self._parse_agesa_version()
         self._firmwares = self._parse_firmwares()
@@ -192,8 +189,8 @@ class PSPTool:
 
     def _parse_agesa_version(self):
         # from https://www.amd.com/system/files/TechDocs/44065_Arch2008.pdf
-        start = self._file_content.find(b'AGESA!')
-        version_string = self._file_content[start:start + 36]
+        start = self.binary.find(b'AGESA!')
+        version_string = self.binary[start:start + 36]
 
         agesa_magic = version_string[0:8]
         component_name = version_string[9:16]
@@ -202,11 +199,11 @@ class PSPTool:
         return str(b''.join([agesa_magic, b' ', component_name, version]), 'ascii')
 
     def _parse_firmwares(self):
-        """ Takes a _file_content and returns found _firmwares from the Firmware Entry Table (FET) as a list of
+        """ Takes a binary and returns found _firmwares from the Firmware Entry Table (FET) as a list of
         dictionaries. """
 
         # AA55AA55 is to unspecific, so we require a word of padding before (to be tested)
-        m = re.search(b'\xff\xff\xff\xff' + FIRMWARE_ENTRY_MAGIC, self._file_content)
+        m = re.search(b'\xff\xff\xff\xff' + FIRMWARE_ENTRY_MAGIC, self.binary)
 
         if m is None:
             print_error_and_exit('Could not find any Firmware Entry Table!')
@@ -215,22 +212,22 @@ class PSPTool:
         size = 0
 
         # Find out size by determining an FF-word as termination
-        while offset <= len(self._file_content) - 4:
-            if self._file_content[(offset + size):(offset + size + 4)] != b'\xff\xff\xff\xff':
+        while offset <= len(self.binary) - 4:
+            if self.binary[(offset + size):(offset + size + 4)] != b'\xff\xff\xff\xff':
                 size += 4
             else:
                 break
 
-        firmware_entry_table = self._file_content[offset:offset + size]
+        firmware_entry_table = self.binary[offset:offset + size]
         entries = chunker(firmware_entry_table[4:], 4)
 
-        # If the input file contains additional headers, shift those away by assuming the FET to be at 0x20000
+        # If the binary contains additional headers, shift those away by assuming the FET to be at 0x20000
         bios_rom_offset = offset - FIRMWARE_ENTRY_TABLE_BASE_ADDRESS
 
         if bios_rom_offset != 0:
             print('Found Firmware Entry Table at 0x%x instead of 0x%x. All addresses will lack an offset of 0x%x.' %
                   (offset, FIRMWARE_ENTRY_TABLE_BASE_ADDRESS, bios_rom_offset))
-            self._file_content = self._file_content[bios_rom_offset:]
+            self.binary = self.binary[bios_rom_offset:]
 
         firmwares = []
 
@@ -240,7 +237,7 @@ class PSPTool:
 
             # address=0 seams to be an invalid entry
             if address != 0:
-                directory = self._file_content[address:address + 16 * 8]
+                directory = self.binary[address:address + 16 * 8]
                 magic = directory[:4]
 
                 # If this is a PSP combo directory
@@ -249,7 +246,7 @@ class PSPTool:
                     psp_dir_two_addr = struct.unpack('<I', directory[14*4:14*4+4])[0] & 0x00FFFFFF
 
                     for address in [psp_dir_one_addr, psp_dir_two_addr]:
-                        magic = self._file_content[address:address + 4]
+                        magic = self.binary[address:address + 4]
                         firmwares.append({
                             'address': address,
                             'magic': magic,
@@ -295,7 +292,7 @@ class PSPTool:
                     'magic': magic,
                     'type': type_,
                     'secondary': False,
-                    'content': self._file_content[address:address + 0x8c]
+                    'content': self.binary[address:address + 0x8c]
                 })
 
             else:
@@ -310,11 +307,11 @@ class PSPTool:
 
     def _parse_directory(self, address):
         count_offset = address + 8
-        count = struct.unpack('<I', self._file_content[count_offset:count_offset + 4])[0]
-        magic = self._file_content[address:address + 4]
+        count = struct.unpack('<I', self.binary[count_offset:count_offset + 4])[0]
+        magic = self.binary[address:address + 4]
 
         size = DIRECTORY_HEAD_SIZES[magic] + (DIRECTORY_ENTRY_SIZES[magic] * count)
-        termination_bytes = self._file_content[(address + size):(address + size + 4)]
+        termination_bytes = self.binary[(address + size):(address + size + 4)]
 
         # Assertion that we assumed the right directory size
         if termination_bytes != b'\xff\xff\xff\xff':
@@ -325,7 +322,7 @@ class PSPTool:
             'size': size,
             'count': count,
             'magic': magic,
-            'content': self._file_content[address:address + size],
+            'content': self.binary[address:address + size],
             'secondary': None
         }
 
@@ -358,7 +355,7 @@ class PSPTool:
 
             start = entry_dict['address']
             end = start + entry_dict['size']
-            entry_content = rstrip_padding(self._file_content[start:end])
+            entry_content = rstrip_padding(self.binary[start:end])
 
             entry_dict['content'] = entry_content
 
@@ -438,16 +435,17 @@ class PSPTool:
         start = entry['address']
         size = entry.get('s_packed') or entry['size']
         end = start + size
-        sig = self._file_content[start - 0x100:end]
+        sig = self.binary[start - 0x100:end]
 
         compressed = True if entry.get('compressed') else False
 
         if compressed:
-            data_decompressed = zlib_decompress(rstrip_padding(self._file_content[start:end - 0x100]))
+            data_decompressed = zlib_decompress(rstrip_padding(self.binary[start:end - 0x100]))
             data = data_decompressed[:entry['s_signed'] + 0x100]
         else:
-            data = self._file_content[start:end - 0x100]
+            data = self.binary[start:end - 0x100]
 
+        # todo: remove file handling from PSPTool
         (fd_sig, sig_fname) = tempfile.mkstemp()
         (fd_data, data_fname) = tempfile.mkstemp()
 
@@ -490,12 +488,11 @@ class PSPTool:
         dir_start = directory['address']
         dir_end = dir_start + directory['size']
 
-        raw_directory_header = self._file_content[dir_start:dir_end]
+        raw_directory_header = self.binary[dir_start:dir_end]
 
         return raw_directory_header
 
-    def extract_entry(self, directory_index, entry_index, outfile=None, no_duplicates=False, decompress=False,
-                      to_pem_key=False):
+    def extract_entry(self, directory_index, entry_index, no_duplicates=False, decompress=False, to_pem_key=False):
         entry = self._directories[directory_index]['entries'][entry_index]
         entry_content = entry['content']
 
@@ -523,18 +520,11 @@ class PSPTool:
                              b'\n'.join(chunker(b64encode(der_encoding), 64)) + \
                              b'\n-----END PUBLIC KEY-----\n'
 
-                if outfile is not None:
-                    outfile += '.pem'
-
                 entry_content = pem_format
             else:
                 self._print_info('No AMD Signing Key detected. Extracting raw entry instead.')
 
-        if outfile is not None:
-            with open(outfile, 'wb') as f:
-                f.write(entry_content)
-        else:
-            return entry_content
+        return entry_content
 
     def extract_directory(self, directory_index, outdir=None, no_duplicates=False, decompress=False, to_pem_key=False):
         """
@@ -579,9 +569,9 @@ class PSPTool:
                     directory_end = all_directories[directory_index + 1]['address']
                 else:
                     print_warning('Assuming EOF for the bounds of directory %d.' % directory_index)
-                    directory_end = len(self._file_content)
+                    directory_end = len(self.binary)
 
-            directory_content = self._file_content[directory_start:directory_end]
+            directory_content = self.binary[directory_start:directory_end]
 
             outfile = outdir + '/d%.2d_%s_%s' % (directory_index, directory['type'], hex(directory_start))
 
@@ -597,31 +587,25 @@ class PSPTool:
         for directory_index in range(len(self._directories)):
             self.extract_directory(directory_index, outdir, decompress, no_duplicates, to_pem_key)
 
-    def replace_directory_entry(self, directory_index, entry_index, address, size, subfile, outfile=None):
+    def replace_directory_entry(self, directory_index, entry_index, address, size, sub_binary):
         # todo: hacky! actually change the PSPTool model instead of just assembling bytes together
 
         directory = self._directories[directory_index]
         entry = directory['entries'][entry_index]
 
-        if subfile is not None:
-            with open(subfile, 'rb') as f:
-                subfile_content = f.read()
-        else:
-            subfile_content = sys.stdin.buffer.read()
-
-        if len(subfile_content) < entry['size']:
+        if len(sub_binary) < entry['size']:
             print_error_and_exit('input of at least 0x%x bytes needed.' % entry['size'])
 
-        # 1) insert subfile at address and pad it to size (if needed)
+        # 1) insert sub_binary at address and pad it to size (if needed)
         #  note: its the caller's responsibility that the address may be overwritten by size bytes
         start = address
-        padding_size = size - len(subfile_content)
+        padding_size = size - len(sub_binary)
 
-        end = address + len(subfile_content)
+        end = address + len(sub_binary)
         end_padded = end + padding_size
 
         padding = padding_size * b'\xFF'
-        self._file_content = self._file_content[:start] + subfile_content + padding + self._file_content[end_padded:]
+        self.binary = self.binary[:start] + sub_binary + padding + self.binary[end_padded:]
 
         # 2) adapt the directory entry to point to the new entry
         directory_header = self.get_directory_header_with_index(directory_index)
@@ -645,15 +629,7 @@ class PSPTool:
         dir_start = directory['address']
         dir_end = dir_start + directory['size']
 
-        # todo: extract: self.update_file_content(addr, size, content)
-        self._file_content = self._file_content[:dir_start] + new_directory_header + self._file_content[dir_end:]
-
-        # todo: maybe extract: self.write_output(outfile)
-        if outfile is not None:
-            with open(outfile, 'wb') as f:
-                f.write(self._file_content)
-        else:
-            return self._file_content
+        self.binary = self.binary[:dir_start] + new_directory_header + self.binary[dir_end:]
 
     def update_entry_header(self, directory_index, entry_index, size):
         directory = self._directories[directory_index]
@@ -683,11 +659,9 @@ class PSPTool:
         start = entry['address']
         end = start + 0x100
 
-        self._file_content = self._file_content[:start] + header + self._file_content[end:]
+        self.binary = self.binary[:start] + header + self.binary[end:]
 
-        return self._file_content
-
-    def update_signatures(self, private_key, outfile=None):
+    def update_signatures(self, private_key):
         directory_entries = [directory['entries'] for directory in self._directories]
         all_entries = [entry for sublist in directory_entries for entry in
                        sublist if entry['type'] > 0x3]
@@ -702,7 +676,7 @@ class PSPTool:
 
         private_key = load_pem_private_key(private_key_pem, password=None, backend=default_backend())
 
-        out = bytearray(self._file_content)
+        out = bytearray(self.binary)
         for entry in all_entries:
             if entry['type'] in DIRECTORY_KEY_TYPES.keys() or 'sig_fp' in entry:
                 # make b'1bb987c359 to 1BB987C3
@@ -737,12 +711,6 @@ class PSPTool:
 
                 sig_start = entry['address'] + len(entry['content']) - len(signature)
                 out[sig_start:sig_start+len(signature)] = signature
-
-        if outfile is not None:
-            with open(outfile, 'wb') as f:
-                f.write(out)
-        else:
-            return out
 
     def print_directory_entries(self, directory_index, no_duplicates=False, display_entry_header=False,
                                 display_arch=False, csvfile=None):
@@ -890,6 +858,7 @@ class PSPTool:
     def print_all_directory_entries(self, no_duplicates=False, display_entry_header=False, display_arch=False,
                                     csvfile=None):
         if csvfile:
+            # todo: fix
             data = get_database(csvfile, self.file)
 
             position = 0
@@ -996,59 +965,74 @@ def main():
     ]), action='store_true')
 
     args = parser.parse_args()
-    pt = PSPTool(args.file, verbose=args.verbose)
+
+    # File handling
+    with open(args.file, 'rb') as f:
+        binary = f.read()
+
+    output = None
+
+    # PSPTool
+    psp = PSPTool(binary, verbose=args.verbose)
 
     if args.verbose:
-        print(pt.agesa_version)
-
-    out = None
+        print(psp.agesa_version)
 
     # Now follows an ugly but necessary argument dependency checking
     if args.extract_entry:
         if args.directory_index is not None:
             if args.entry_index is not None:
-                out = pt.extract_entry(args.directory_index, args.entry_index, outfile=args.outfile,
-                                       no_duplicates=args.no_duplicates, decompress=args.decompress,
-                                       to_pem_key=args.pem_key)
+                output = psp.extract_entry(args.directory_index, args.entry_index, no_duplicates=args.no_duplicates,
+                                           decompress=args.decompress, to_pem_key=args.pem_key)
             else:
-                pt.extract_directory(args.directory_index, outdir=args.outdir, no_duplicates=args.no_duplicates,
-                                     decompress=args.decompress, to_pem_key=args.pem_key)
+                psp.extract_directory(args.directory_index, outdir=args.outdir, no_duplicates=args.no_duplicates,
+                                      decompress=args.decompress, to_pem_key=args.pem_key)
         else:
             if args.entry_index is None:
-                pt.extract_all_directories(outdir=args.outfile, no_duplicates=args.no_duplicates,
-                                           decompress=args.decompress, to_pem_key=args.pem_key)
+                psp.extract_all_directories(outdir=args.outfile, no_duplicates=args.no_duplicates,
+                                            decompress=args.decompress, to_pem_key=args.pem_key)
             else:
                 parser.print_help(sys.stderr)
 
     elif args.replace_directory_entry:
         if args.directory_index is not None and args.entry_index is not None:
-            out = pt.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size,
-                                             args.subfile, outfile=args.outfile)
+            if args.subfile is None:
+                sub_binary = sys.stdin.buffer.read()
+            else:
+                with open(args.subfile, 'rb') as f:
+                    sub_binary = f.read()
+
+            psp.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size, sub_binary)
 
             if args.update_entry_header:
-                out = pt.update_entry_header(args.directory_index, args.entry_index, args.size)
+                psp.update_entry_header(args.directory_index, args.entry_index, args.size)
 
+            output = psp.binary
         else:
             parser.print_help(sys.stderr)
 
     elif args.update_signatures:
         if args.private_key is not None:
-            out = pt.update_signatures(args.private_key, outfile=args.outfile)
+            psp.update_signatures(args.private_key)
+            output = psp.binary
         else:
             parser.print_help(sys.stderr)
 
     else:  # args.entries is the default behaviour
         if args.directory_index is not None:
-            pt.print_directory_entries(args.directory_index, no_duplicates=args.no_duplicates,
-                                       display_entry_header=args.entry_header, display_arch=args.detect_arch,
-                                       csvfile=args.csvfile)
+            psp.print_directory_entries(args.directory_index, no_duplicates=args.no_duplicates,
+                                        display_entry_header=args.entry_header, display_arch=args.detect_arch,
+                                        csvfile=args.csvfile)
         else:
-            pt.print_all_directory_entries(no_duplicates=args.no_duplicates, display_entry_header=args.entry_header,
-                                           display_arch=args.detect_arch, csvfile=args.csvfile)
+            psp.print_all_directory_entries(no_duplicates=args.no_duplicates, display_entry_header=args.entry_header,
+                                            display_arch=args.detect_arch, csvfile=args.csvfile)
 
-    # If not outfile was specified, print the result to stdout
-    if out is not None:
-        sys.stdout.buffer.write(out)
+    # Output handling (stdout or outfile)
+    if args.outfile is None:
+        sys.stdout.buffer.write(output)
+    else:
+        with open(args.outfile, 'wb') as f:
+            f.write(output)
 
 
 if __name__ == '__main__':
