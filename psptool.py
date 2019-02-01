@@ -419,6 +419,18 @@ class PSPTool:
 
         return header
 
+    def _build_entry_header(self, entry):
+        binary = bytearray(b'\x00' * 0x100)
+
+        binary[0x14:0x18] = struct.pack('<I', entry['s_signed'])
+        binary[0x48:0x4c] = struct.pack('<I', entry['compressed'])
+        binary[0x50:0x54] = struct.pack('<I', entry['s_full'])
+        binary[0x6c:0x70] = struct.pack('<I', entry['s_packed'])
+
+        return bytes(binary)
+
+
+
     def _verify_signature(self, entry):
         """ Verifies the signature of a given entry using the corresponding pubkey """
 
@@ -590,14 +602,23 @@ class PSPTool:
         for directory_index in range(len(self._directories)):
             self.extract_directory(directory_index, outdir, decompress, no_duplicates, to_pem_key)
 
-    def replace_directory_entry(self, directory_index, entry_index, address, size, sub_binary):
+    def replace_directory_entry(self, directory_index, entry_index, address, size, sub_binary,
+                                update_entry_header=False):
         # todo: hacky! actually change the PSPTool model instead of just assembling bytes together
 
         directory = self._directories[directory_index]
         entry = directory['entries'][entry_index]
 
-        if len(sub_binary) < entry['size']:
-            print_error_and_exit('input of at least 0x%x bytes needed.' % entry['size'])
+        if update_entry_header:
+            # 0) prepend entry header with current entry fields
+            # todo: replace 1337 by actual sizes calculated from 'size'
+            entry['s_signed'] = 1337
+            entry['compressed'] = 0
+            entry['s_full'] = 1337
+            entry['s_packed'] = 1337
+
+            new_entry_header = self._build_entry_header(entry)
+            sub_binary = new_entry_header + sub_binary
 
         # 1) insert sub_binary at address and pad it to size (if needed)
         #  note: its the caller's responsibility that the address may be overwritten by size bytes
@@ -960,21 +981,24 @@ def main():
         '']), action='store_true')
 
     action.add_argument('-R', '--replace-directory-entry', help='\n'.join([
-        'Copy a new entry into the ROM file and replace an existing directory entry with a new address and size.',
-        'Note: The given address and size are assumed to be overwritable.'
+        'Copy a new entry into the ROM file and replace an existing directory ',
+        'entry with a new address and size.',
+        'Note: The given address and size are assumed to be overwritable.',
         '-d idx -e idx -b addr -w size [-y] [-s subfile] [-o outfile]',
         '',
         '-d idx:  specifies directory_index',
         '-e idx:  specifies entry_index',
         '-b addr: specifies destination address of the new entry',
-        '-w size: specifies size of the new directory entry (must be at least the size of the new entry)',
+        '-w size: specifies size of the new directory entry (must be at least the ',
+        'size of the new entry)',
         '-y:      rebuild inner entry header (e.g. update sizes)',
         '-s file: specifies subfile (i.e. the new entry) (default: stdin)',
         '-o file: specifies outfile (default: stdout)',
         '']), action='store_true')
 
     action.add_argument('-U', '--update-signatures', help='\n'.join([
-        'Re-sign all signatures in the ROM file with a given private key and export a new ROM file.',
+        'Re-sign all signatures in the ROM file with a given private key and export ',
+        'a new ROM file.',
         '-p private_key [-o outfile]',
         '',
         '-p file:   specifies a path to the private_key in PEM format for re-signing',
@@ -1019,7 +1043,8 @@ def main():
                 with open(args.subfile, 'rb') as f:
                     sub_binary = f.read()
 
-            psp.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size, sub_binary)
+            psp.replace_directory_entry(args.directory_index, args.entry_index, args.address, args.size, sub_binary,
+                                        update_entry_header=args.update_entry_header)
 
             if args.update_entry_header:
                 psp.update_entry_header(args.directory_index, args.entry_index, args.size)
