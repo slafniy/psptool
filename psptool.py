@@ -450,7 +450,10 @@ class PSPTool:
         (fd_data, data_fname) = tempfile.mkstemp()
 
         pubkey_tmp = tempfile.mktemp()
-        self.extract_entry(pubkey['directory'], pubkey['entry'], pubkey_tmp, False, False, True)
+        raw_entry = self.extract_entry(pubkey['directory'], pubkey['entry'], False, False, True)
+
+        with open(pubkey_tmp, 'wb') as f:
+            f.write(raw_entry)
 
         try:
             sig_file = os.fdopen(fd_sig, "wb")
@@ -463,7 +466,7 @@ class PSPTool:
 
             try:
                 subprocess.check_output(["openssl", "dgst", "-sha256", "-sigopt", "rsa_padding_mode:pss", "-signature",
-                                         sig_fname, "-verify", pubkey_tmp + ".pem", data_fname])
+                                         sig_fname, "-verify", pubkey_tmp, data_fname])
 
                 return True
             except subprocess.CalledProcessError:
@@ -471,7 +474,7 @@ class PSPTool:
         finally:
             os.remove(sig_fname)
             os.remove(data_fname)
-            os.remove(pubkey_tmp + ".pem")
+            os.remove(pubkey_tmp)
 
     def get_entry_with_type(self, type_):
         # todo: extract all_entries into member or method
@@ -1028,11 +1031,12 @@ def main():
                                             display_arch=args.detect_arch, csvfile=args.csvfile)
 
     # Output handling (stdout or outfile)
-    if args.outfile is None:
-        sys.stdout.buffer.write(output)
-    else:
-        with open(args.outfile, 'wb') as f:
-            f.write(output)
+    if output is not None:
+        if args.outfile is None:
+            sys.stdout.buffer.write(output)
+        else:
+            with open(args.outfile, 'wb') as f:
+                f.write(output)
 
 
 if __name__ == '__main__':

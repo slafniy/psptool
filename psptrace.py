@@ -646,7 +646,11 @@ def main():
 
     global args, psptool
     args = parser.parse_args()
-    psptool = PSPTool(args.romfile)
+
+    with open(args.romfile, 'rb') as f:
+        binary = f.read()
+
+    psptool = PSPTool(binary)
 
     data = get_database(args.csvfile)
     read_accesses = data['read_accesses']
