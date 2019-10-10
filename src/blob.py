@@ -19,10 +19,10 @@ import struct
 
 from typing import List
 
-from .utils import NestedBuffer, chunker
-from .firmware import Firmware
-from .directory import Directory
-from .entry import Entry
+from utils import NestedBuffer, chunker
+from firmware import Firmware
+from directory import Directory
+from entry import Entry
 
 
 class Blob(NestedBuffer):

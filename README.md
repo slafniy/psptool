@@ -8,13 +8,13 @@ It is based on reverse-engineering efforts of AMD's **proprietary filesystem** u
 
 PSPTool favourably works with UEFI images as obtained through BIOS updates.
 
-## Installation
+## Build (Windows)
 
+Run this:
 ```
-git clone https://github.com/cwerling/psptool
-cd psptool
-sudo python3 setup.py install
+build_windows.bat
 ```
+it should build ```dist/psptool.exe```
 
 ## CLI Usage
 

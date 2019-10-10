@@ -17,10 +17,10 @@
 import string
 import struct
 
-from .utils import NestedBuffer
-from .utils import shannon
-from .utils import chunker
-from .utils import zlib_decompress
+from utils import NestedBuffer
+from utils import shannon
+from utils import chunker
+from utils import zlib_decompress
 
 from binascii import hexlify
 from base64 import b64encode
